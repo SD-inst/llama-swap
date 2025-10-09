@@ -22,15 +22,27 @@ type MetricsRecorder struct {
 // MetricsMiddleware sets up the MetricsResponseWriter for capturing upstream requests
 func MetricsMiddleware(pm *ProxyManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		bodyBytes, err := io.ReadAll(c.Request.Body)
-		if err != nil {
-			pm.sendErrorResponse(c, http.StatusBadRequest, "could not ready request body")
-			c.Abort()
+		path := c.Request.URL.Path
+		upstream := strings.HasPrefix(path, "/upstream/")
+		upstreamCompletion := upstream && (strings.HasSuffix(path, "/v1/chat/completions") || strings.HasSuffix(path, "/v1/completions"))
+		if upstream && !upstreamCompletion {
+			c.Next()
 			return
 		}
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		requestedModel := ""
+		if !upstream {
+			bodyBytes, err := io.ReadAll(c.Request.Body)
+			if err != nil {
+				pm.sendErrorResponse(c, http.StatusBadRequest, "could not ready request body")
+				c.Abort()
+				return
+			}
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-		requestedModel := gjson.GetBytes(bodyBytes, "model").String()
+			requestedModel = gjson.GetBytes(bodyBytes, "model").String()
+		} else {
+			requestedModel = strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(c.Param("upstreamPath"), "/"), "/v1/chat/completions"), "/v1/completions")
+		}
 		if requestedModel == "" {
 			pm.sendErrorResponse(c, http.StatusBadRequest, "missing or invalid 'model' key")
 			c.Abort()
