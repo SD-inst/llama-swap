@@ -75,6 +75,38 @@ type CompatConfig struct {
 	IgnoreWebsockets bool `yaml:"ignoreWebsockets"`
 }
 
+// SlotPersistenceConfig persists a model's llama-server prompt-cache slots to
+// disk so the KV cache survives an unload/reload (e.g. a model swap). It is a
+// per-model setting; like capabilities, an empty block (no path) means the
+// feature is not configured, so it is switched off by leaving the block out
+// or removing its path.
+type SlotPersistenceConfig struct {
+	// Path is the directory holding saved slot state. Must match llama-server's
+	// --slot-save-path. Setting this enables slot save/restore.
+	Path string `yaml:"path"`
+	// DeleteAfterRestore removes the persisted files after a successful
+	// restore. Useful when persisting to tmpfs so the KV is not held in RAM
+	// twice (once as files, once in the live slot).
+	DeleteAfterRestore bool `yaml:"deleteAfterRestore"`
+	// Slots is the number of slots to persist (match llama-server's -np).
+	// Defaults to 1.
+	Slots int `yaml:"slots"`
+}
+
+// Empty reports whether the block has no path, i.e. slot save/restore is not
+// configured. It mirrors ModelCapConfig.Empty.
+func (s SlotPersistenceConfig) Empty() bool {
+	return s.Path == ""
+}
+
+// SlotCount returns the number of slots to persist, defaulting to 1.
+func (s SlotPersistenceConfig) SlotCount() int {
+	if s.Slots <= 0 {
+		return 1
+	}
+	return s.Slots
+}
+
 type ModelConfig struct {
 	Cmd           string   `yaml:"cmd"`
 	CmdStop       string   `yaml:"cmdStop"`
@@ -113,6 +145,11 @@ type ModelConfig struct {
 
 	// Compatibility settings for upstream applications.
 	Compat CompatConfig `yaml:"compat"`
+
+	// Slot persistence: save/restore the model's KV cache to disk across
+	// unloads/swaps. Per-model; disabled by default. A pointer so the block is
+	// omitted entirely (and pruned from redacted output) when not configured.
+	SlotPersistence *SlotPersistenceConfig `yaml:"slotPersistence"`
 
 	// Capabilities defines what modalities and features the model supports.
 	Capabilities ModelCapConfig `yaml:"capabilities"`

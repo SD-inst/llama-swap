@@ -567,6 +567,29 @@
                         "default": {},
                         "description": "Compatibility settings for upstream applications."
                     },
+                    "slotPersistence": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Directory holding saved slot state. Must match llama-server's --slot-save-path. Setting this enables slot save/restore; an empty block (no path) is treated as not configured."
+                            },
+                            "deleteAfterRestore": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "Remove the persisted files after a successful restore. Useful with tmpfs so the KV cache is not held in RAM twice (once as files, once in the live slot)."
+                            },
+                            "slots": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "default": 1,
+                                "description": "Number of slots to persist. Must match llama-server's -np."
+                            }
+                        },
+                        "required": ["path"],
+                        "additionalProperties": false,
+                        "description": "Persist the model's llama-server prompt-cache slots to disk so the KV cache survives an unload/reload (e.g. a model swap). Omit the block (or leave path empty) to disable it."
+                    },
                     "capabilities": {
                         "type": "object",
                         "properties": {

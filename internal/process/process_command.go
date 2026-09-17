@@ -423,6 +423,15 @@ func (p *ProcessCommand) run() {
 			toreDown := cmd != nil
 			if cmd != nil {
 				setState(StateStopping)
+				if sp := p.config.SlotPersistence; sp != nil && !sp.Empty() {
+					// Save while the upstream is still alive (the stop signal
+					// has not been sent yet). Bounded by the graceful stop
+					// timeout so a slow save cannot stall teardown past the
+					// unload budget.
+					sctx, scancel := context.WithTimeout(context.Background(), stop.timeout)
+					_ = p.saveSlots(sctx)
+					scancel()
+				}
 				p.killProcess(cmd, cmdCancel, cmdDone, stop.timeout)
 				cmd = nil
 				cmdDone = nil
@@ -559,6 +568,15 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 
 	checkEndpoint := strings.TrimSpace(p.config.CheckEndpoint)
 	if checkEndpoint == "none" {
+		// Only a configured slot restore needs a live listener. Without one,
+		// keep the original instant-ready behavior for none models. With one,
+		// wait (bounded) for the upstream to accept connections so the restore
+		// hits a live server instead of racing it coming up — a failed restore
+		// would delete the cached files.
+		if p.hasSlotPersistence() {
+			p.waitUpstreamListening(startCtx, healthCheckTimeout, reverseProxy.Transport)
+		}
+		p.restoreSlotsIfConfigured(startCtx, healthCheckTimeout)
 		return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
 	}
 
@@ -607,7 +625,57 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		}
 	}
 
+	// Restore persisted slots before the model is marked ready. StateReady is
+	// set by the run loop only after doStart returns, so the first request
+	// (released on StateReady) can never race a restore.
+	p.restoreSlotsIfConfigured(startCtx, healthCheckTimeout)
+
 	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
+}
+
+// hasSlotPersistence reports whether this model has a usable slot persistence
+// block configured (a non-empty block with a path).
+func (p *ProcessCommand) hasSlotPersistence() bool {
+	sp := p.config.SlotPersistence
+	return sp != nil && !sp.Empty()
+}
+
+// restoreSlotsIfConfigured loads persisted KV-cache slots before the model is
+// marked ready. It is a no-op unless slot persistence is configured, and it is
+// non-fatal: a bad or interrupted cache is discarded and the slot serves cold,
+// never a start failure.
+func (p *ProcessCommand) restoreSlotsIfConfigured(ctx context.Context, timeout time.Duration) {
+	if !p.hasSlotPersistence() {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_ = p.restoreSlots(rctx) // non-fatal: a bad cache serves cold, not a start failure
+}
+
+// waitUpstreamListening polls a plain HTTP GET at the upstream until it gets
+// any response, so a slot restore can hit a live listener. It exists for
+// checkEndpoint:none models, which skip the health loop and would otherwise
+// race the server coming up. Bounded by timeout.
+func (p *ProcessCommand) waitUpstreamListening(ctx context.Context, timeout time.Duration, transport http.RoundTripper) {
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.config.Proxy, nil)
+		if err != nil {
+			return
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			return // any response: the listener is up
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 // sendStopSignal runs the configured CmdStop (if any) or sends SIGTERM to

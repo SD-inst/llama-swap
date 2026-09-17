@@ -342,6 +342,23 @@ models:
       # - optional, default: false
       ignoreWebsockets: true
 
+    # slotPersistence: persist the model's llama-server prompt-cache slots to
+    # disk so the KV cache survives an unload/reload (e.g. a model swap)
+    # - optional; omit the block (or leave path empty) to disable it
+    # - requires llama-server started with --slot-save-path set to `path`
+    # - slots must match llama-server's -np
+    slotPersistence:
+      # path: directory holding saved slot state; setting it enables save/restore
+      # - must match llama-server's --slot-save-path
+      path: /kv-cache/qwen-coder
+      # deleteAfterRestore: remove the persisted files after a successful restore
+      # - useful with tmpfs so the KV is not held in RAM twice (files + live slot)
+      # - optional, default: false
+      deleteAfterRestore: true
+      # slots: number of slots to persist
+      # - optional, default: 1; must match llama-server's -np
+      slots: 1
+
     # useModelName: override the model name that is sent to upstream server
     # - optional, default: ""
     # - useful for when the upstream server expects a specific model name that

@@ -1,10 +1,10 @@
 ---
 title: Automatic model unloading with ttl
-summary: How ttl, globalTTL, unloadTimeout and Docker cmdStop interact, plus how to unload on demand.
+summary: How ttl, globalTTL, unloadTimeout and Docker cmdStop interact, how to unload on demand, and how slotPersistence keeps the KV cache across swaps.
 category: guides
-tags: [ttl, unload, vram, memory, idle, docker, container, cmd-stop]
-config_keys: [globalTTL, unloadTimeout, models.*.ttl, models.*.unloadTimeout, models.*.cmdStop]
-updated: 2026-08-25
+tags: [ttl, unload, vram, memory, idle, docker, container, cmd-stop, slot-persistence, kv-cache]
+config_keys: [globalTTL, unloadTimeout, models.*.ttl, models.*.unloadTimeout, models.*.cmdStop, models.*.slotPersistence]
+updated: 2026-09-18
 ---
 
 # Automatic model unloading with ttl
@@ -82,6 +82,36 @@ $ curl -X POST http://localhost:8080/api/models/unload/qwen-coder
 
 The web UI's model list has an unload button per model that hits the same
 endpoint.
+
+## Keeping the KV cache across swaps (slotPersistence)
+
+Unloading frees VRAM by dropping the model. With `slotPersistence`, llama-swap
+can also save the model's prompt-cache slots to disk on unload and restore
+them on the next load, so the next request reuses the KV cache instead of
+recomputing it. It talks to llama-server's `/slots` API, so it only works with
+`llama-server` started with `--slot-save-path`:
+
+```yaml
+models:
+  qwen-coder:
+    cmd: llama-server --port ${PORT} -np 2 --slot-save-path /kv-cache/qwen-coder -m /models/qwen.gguf
+    slotPersistence:
+      path: /kv-cache/qwen-coder   # must match --slot-save-path; setting it enables save/restore
+      slots: 2                     # must match -np
+      deleteAfterRestore: true     # optional; good with tmpfs
+```
+
+Omit the `slotPersistence` block (or leave `path` empty) to disable it, the
+same way other per-model blocks are switched off.
+
+- `path` **must** match llama-server's `--slot-save-path`; `slots` **must**
+  match its `-np`. A mismatch makes saves/restores target the wrong slots.
+- Restore is **non-fatal**: a bad or interrupted cache is dropped and the slot
+  serves cold. The save/restore markers ensure an interrupted save is never
+  mistaken for a complete one.
+- `deleteAfterRestore` removes the files after a successful restore, so on a
+  tmpfs the KV cache is not held in RAM twice (once as files, once in the live
+  slot).
 
 ## Picking a value
 
